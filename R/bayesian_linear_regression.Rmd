@@ -1,0 +1,133 @@
+---
+title: "VI on Bayesian Linear Regression"
+output:
+  html_document:
+    df_print: paged
+---
+
+Bayesian Linear Regression
+
+$$y|\beta, \sigma^2 \sim N(X\beta, \sigma^2 I)$$
+$$\beta \sim N(0, \sigma_\beta^2I)$$
+$$\sigma^2 \sim IG(a, b)$$
+
+```{r initialise}
+library("invgamma")
+priorBeta <- function(K) {
+  return(rnorm(K, 0 , 1))
+}
+priorVar <- function() {
+  return(rinvgamma(1, 1, 1))
+}
+
+blrModel <- function(X, beta, sigma) {
+  m <- X %*% beta
+  return(rnorm(length(m), m, sigma))
+}
+```
+
+```{r generate_model}
+n <- 10000
+K <- 100
+
+# fix design matrix
+X <- matrix(rnorm(n*K), n, K)
+```
+Coordinate Ascent
+```{r ELBO}
+elbo <- function(n, K, mu, Sigma, a, a2, b, b2, varBeta) {
+  p1 <- -n*log(2*pi)/2 - K*log(varBeta)/2 + log(abs(det(Sigma)))/2
+  p2 <- (a*log(b) - a2*log(b2))
+  p3 <- log(gamma(a)) - log(gamma(a2))
+  p4 <- (sum(diag(Sigma)) + (t(mu) %*% mu)) / 2 / varBeta
+  p5 <- K / 2
+  return(p1+p2+p3+p4+p5)
+}
+```
+```{r vI}
+cavi <- function(y, X, tolerance) {
+  n <- length(y)
+  K <- dim(X)[2]
+  varBeta <- 1
+  
+  # initialise variational factors
+  mu <- rep(0, K)
+  Sigma <- varBeta * diag(K)
+  
+  a <- 1
+  b <- 1
+  
+  # get initial values
+  u = y - (X %*% mu)
+  v =  t(X) %*% X
+  w = t(X) %*% y
+  
+  a2 <- a + n/2
+  b2 <- b + .5*(t(u) %*% u) + .5*sum(diag(Sigma %*% v))
+  
+  elbo1 <- -1e100
+  difference <- -elbo1
+  
+  while (difference > tolerance) {
+    # update beta params
+    c <- as.vector(a2 / b2)
+    Sigma2 <- solve(c*v + diag(K)/varBeta)
+    mu2 <- c * Sigma2 %*% w
+    # update sigma squared params
+    u = y - (X %*% mu2)
+    b2 <- b + .5*(t(u) %*% u) + .5*sum(diag(Sigma %*% v))
+    # compute elbo
+    elbo2 <- elbo(n, K, mu2, Sigma2, a, a2, b, b2, varBeta)
+    difference <- elbo2 - elbo1
+    elbo1 <- elbo2
+  }
+  parameters <- list("mu" = mu2, "Sigma" = Sigma2, "a" = a2, "b" = b2)
+  return(parameters)
+}
+```
+Testing
+```{r test}
+beta <- priorBeta(K)
+variance <- priorVar()
+y <- blrModel(X, beta, sqrt(variance))
+    
+tol <- .1
+params <- cavi(y, X, tol)
+```
+VSBC
+```{r vsbc}
+vsbc <- function(M, X, pBeta = priorBeta, pVar = priorVar, tolerance = .01) {
+  K <- dim(X)[2]
+  probs <- matrix(numeric(M*(K+1)), nrow = M, ncol = K+1)
+  
+  for(i in 1:M) {
+    beta <- pBeta(K)
+    variance <- pVar()
+    y <- blrModel(X, beta, sqrt(variance))
+    
+    # get params
+    params <- cavi(y, X, tolerance)
+    
+    # get prob values
+    probs[i, 1:K] <- pnorm(beta, params$mu, sqrt(diag(params$Sigma)))
+    probs[i, K+1] <- pinvgamma(variance, params$a, params$b)
+  }
+  
+  return(probs)
+}
+```
+```{r test2}
+M <- 100
+probs <- vsbc(M, X)
+```
+
+```{r KSTest}
+# do KS-test on probs
+
+```
+
+PSIS
+```{r psis}
+psis <- function() {
+}
+```
