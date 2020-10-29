@@ -13,6 +13,7 @@ $$\sigma^2 \sim IG(a, b)$$
 
 ```{r initialise}
 library("invgamma")
+
 priorBeta <- function(K) {
   return(rnorm(K, 0 , 1))
 }
@@ -36,16 +37,60 @@ X <- matrix(rnorm(n*K), n, K)
 Coordinate Ascent
 ```{r ELBO}
 elbo <- function(n, K, mu, Sigma, a, a2, b, b2, varBeta) {
-  p1 <- -n*log(2*pi)/2 - K*log(varBeta)/2 + log(abs(det(Sigma)))/2
+  p1 <- -n*log(2*pi)/2 - K*log(varBeta)/2 + K/2
   p2 <- (a*log(b) - a2*log(b2))
-  p3 <- log(gamma(a)) - log(gamma(a2))
-  p4 <- (sum(diag(Sigma)) + (t(mu) %*% mu)) / 2 / varBeta
-  p5 <- K / 2
-  return(p1+p2+p3+p4+p5)
+  p3 <- - log(gamma(a)) + log(gamma(a2))
+  p4 <- - (sum(diag(Sigma)) + (t(mu) %*% mu)) / 2 / varBeta
+  p5 <- log(abs(det(Sigma)))/2
+  
+  fullelbo <- p1+p2+p3+p4+p5
+  
+  # p1 and p3 are constant in the algorithm
+  # for numerical stability we exclude them
+  elb <- p2 + p4 + p5
+  
+  return(elb)
 }
 ```
-```{r vI}
-cavi <- function(y, X, tolerance) {
+```{r elbotest}
+# testing the elbo function
+# n <- 10000
+# K <- 100
+# X <- matrix(rnorm(n*K), n, K)
+# 
+# beta <- priorBeta(K)
+# variance <- priorVar()
+# y <- blrModel(X, beta, variance)
+# 
+# a <- 1
+# b <- 1
+# 
+# varBeta <- 1
+# 
+# mu <- rep(0, K)
+# Sigma <- varBeta * diag(K)
+# 
+# u = y - (X %*% mu)
+# v =  t(X) %*% X
+# w = t(X) %*% y
+#   
+# a2 <- a + n/2
+# b2 <- b + .5*(t(u) %*% u) + .5*sum(diag(Sigma %*% v))
+# 
+# for (i in 1:1) {
+#   c <- as.vector(a2 / b2)
+#   Sigma <- solve(c*v + diag(K)/varBeta)
+#   mu2 <- c * Sigma2 %*% w
+#   
+#   u = y - (X %*% mu2)
+#   b2 <- b + .5*(t(u) %*% u) + .5*sum(diag(Sigma %*% v))
+#   
+#   elbotemp <- elbo(n, K, mu2, Sigma2, a, a2, b, b2, varBeta)
+#   print(elbotemp)
+# }
+```
+```{r cavi}
+cavi <- function(y, X, tolerance = .001) {
   n <- length(y)
   K <- dim(X)[2]
   varBeta <- 1
@@ -75,28 +120,22 @@ cavi <- function(y, X, tolerance) {
     mu2 <- c * Sigma2 %*% w
     # update sigma squared params
     u = y - (X %*% mu2)
-    b2 <- b + .5*(t(u) %*% u) + .5*sum(diag(Sigma %*% v))
+    b2 <- b + .5*(t(u) %*% u) + .5*sum(diag(Sigma2 %*% v))
     # compute elbo
     elbo2 <- elbo(n, K, mu2, Sigma2, a, a2, b, b2, varBeta)
     difference <- elbo2 - elbo1
     elbo1 <- elbo2
   }
+  
   parameters <- list("mu" = mu2, "Sigma" = Sigma2, "a" = a2, "b" = b2)
   return(parameters)
 }
 ```
-Testing
-```{r test}
-beta <- priorBeta(K)
-variance <- priorVar()
-y <- blrModel(X, beta, sqrt(variance))
-    
-tol <- .1
-params <- cavi(y, X, tol)
-```
-VSBC
+
+
+#VSBC
 ```{r vsbc}
-vsbc <- function(M, X, pBeta = priorBeta, pVar = priorVar, tolerance = .01) {
+vsbc <- function(M, X, pBeta = priorBeta, pVar = priorVar, tolerance = .0001) {
   K <- dim(X)[2]
   probs <- matrix(numeric(M*(K+1)), nrow = M, ncol = K+1)
   
@@ -111,23 +150,108 @@ vsbc <- function(M, X, pBeta = priorBeta, pVar = priorVar, tolerance = .01) {
     # get prob values
     probs[i, 1:K] <- pnorm(beta, params$mu, sqrt(diag(params$Sigma)))
     probs[i, K+1] <- pinvgamma(variance, params$a, params$b)
+    
+    # print the parameters at each iteration
+    # aa <- c(params$a, params$b, variance, probs[i,K+1])
+    # print(aa)
   }
   
   return(probs)
 }
 ```
-```{r test2}
+```{r vsbctest}
 M <- 100
 probs <- vsbc(M, X)
 ```
 
-```{r KSTest}
-# do KS-test on probs
-
+```{r vsbchist}
+hist(probs[,1], breaks = seq(from = 0, to = 1, by = .05), xlim = c(0,1), probability = T)
+hist(probs[,2], breaks = seq(from = 0, to = 1, by = .05), xlim = c(0,1), probability = T)
+hist(probs[,101], breaks = seq(from = 0, to = 1, by = .05), xlim = c(0,1), probability = T)
 ```
 
-PSIS
-```{r psis}
-psis <- function() {
+```{r kshist}
+pdf("blr_vbsc_histograms.pdf", height = 1, width = 4)
+par(mfrow = c(1, 3), oma = c(.9, 1, .2, 0), pty = 'm', mar = c(.5, .4, .5, 0), mgp = c(1.5, .25, 0), lwd = .5, tck = -.01, cex.axis = .6, cex.lab = .9, cex.main = .9)
+
+for(i in c(1,2,101)) {
+  ss <- seq(from = 0, to = 1, by = .05)
+  
+  hist(probs[, i], breaks = ss, axes = F, xlim = c(0,1), xlab = "", ylab = "", main = "", ylim = c(0, 8), probability = T, xpd=T)
+  #abline(h = 1, lwd = .3, lty = 2, col = 'grey')
+  
+  lines(x = c(.5, .5), y = c(-.5, 1.5), col = 'red', lwd = 1.4)
+  axis(1, padj = -1, lwd = .5, at = c(0, .5, 1), labels = c(0, .5, 1))
+    
+    
+  p1 = probs[, i]
+  p2 = 1-probs[, i]
+  ksTest = ks.test(p1, p2)
+
+  if (i == 1) {
+    axis(2, at = seq(from = 0, to = 8, by = 2), lwd = .5, las = 2)
+    mtext(3, text = paste("KS-test p=", round(ksTest$p.value, digits = 2) ), cex = .7, line = -1.25)
+    mtext(2, text = "density", cex = .5, line = .7)
+    mtext(3, text = expression(beta[1]), cex = .7, line = -.4)
+    mtext(1, text = expression(~p[beta [paste(1,":")]]), cex = .5, line = .5)
+  }
+  if (i == 2) {
+    mtext(3, text = paste(" p=", round(ksTest$p.value,digits = 2)), cex = .7, line = -1.25)
+    mtext(1, text = expression(~p[beta[paste(2,":")]]), cex = .5, line = .5)
+    mtext(3, text = expression(beta[2]), cex = .7, line = -.4)
+  } 
+  if (i == 101){
+    mtext(3, text = paste(" p=", round(ksTest$p.value,digits = 2)), cex = .7, line = -1.25)
+    mtext(1, text = expression(~p[sigma^2[":"]]), cex = .5, line = .5)
+    mtext(3, text = expression(sigma^2), cex = .7, line = -.4)
+  }
 }
+```
+
+# still working on the PSIS bit
+
+PSIS
+```{r jointpdf}
+library(loo)
+library(mvtnorm)
+
+# log joint pdf
+logjointpdf <- function(X, beta, var) {
+  p1 <- sum(dnorm(y, X %*% beta, sqrt(var), log = TRUE))
+  p2 <- sum(dnorm(beta, 0, 1, log = TRUE))
+  p3 <- sum(dinvgamma(var, 1, 1, log = TRUE))
+  return (p1 + p2 + p3)
+}
+
+# log joint variational inference pdf
+logqpdf <- function(beta, var, params) {
+  p1 <- dmvnorm(beta, params$mu, params$Sigma, log = TRUE)
+  p2 <- dinvgamma(var, params$a, params$b, log = TRUE)
+  return (p1 + p2)
+}
+```
+
+Testing
+```{r prior}
+beta <- priorBeta(K)
+variance <- priorVar()
+y <- blrModel(X, beta, sqrt(variance))
+
+tol <- 1e-4
+params <- cavi(y, X, tol)
+```
+
+```{r psis}
+# generate vi posterior samples
+s <- 1000
+logisratio <- rep(0, s)
+for (i in 1:s) {
+  betatemp <- rmvnorm(1, params$mu, params$Sigma)
+  vartemp <- rinvgamma(1, params$a, params$b)
+    
+  logisratio[i] <- logjointpdf(X, t(betatemp), vartemp) - logqpdf(betatemp, vartemp, params)
+}
+
+jd = psis(log_ratios = logisratio, r_eff = NA, cores = 4)
+jd$diagnostics$pareto_k
 ```
