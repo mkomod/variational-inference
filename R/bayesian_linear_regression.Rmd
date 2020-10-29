@@ -201,7 +201,7 @@ for(i in c(1,2,101)) {
     mtext(3, text = expression(beta[2]), cex = .7, line = -.4)
   } 
   if (i == 101){
-    mtext(3, text = paste(" p=", round(ksTest$p.value,digits = 101)), cex = .7, line = -1.25)
+    mtext(3, text = paste(" p=", round(ksTest$p.value,digits = 2)), cex = .7, line = -1.25)
     mtext(1, text = expression(~p[sigma^2[":"]]), cex = .5, line = .5)
     mtext(3, text = expression(sigma^2), cex = .7, line = -.4)
   }
