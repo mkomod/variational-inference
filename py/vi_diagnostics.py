@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torch.distributions as dist
 
+__all__ = ["diagnose_vi_VSBC", "apply_PSIS", ]
+
 
 def diagnose_vi_VSBC(x_data, model, guide, inference_engine, replications=150):
     """ 
@@ -16,36 +18,36 @@ def diagnose_vi_VSBC(x_data, model, guide, inference_engine, replications=150):
     returns:
         
     """
-    params0, y_synthetic = model.generate_synthetic_data(x_data)
-    # TODO: check if we need to take care of bias term
-    post_samples = inference_engine(x_data, y_synthetic)
-    post_samples_mean = torch.Tensor(post_samples.mean(axis=1))
-    
     # output: p-values
-    probs = torch.zeros(replications, post_samples.shape[1])
-    
+    probs = torch.zeros(replications, guide.latent_dim)
+        
     if guide.__repr__() == "AutoDiagonalNormal()":
-        post_samples_sd = torch.Tensor(post_samples.std(axis=1))
-        norm_dist = dist.Normal(loc=post_samples_mean, scale=post_samples_sd)
+        cov_fn= lambda x: x.std(axis=0)
+        norm_dist_fn = dist.Normal# (loc=post_samples_mean, scale=post_samples_sd)
             
     elif guide.__repr__() == "AutoMultivariateNormal()":
-        post_samples_cov = np.cov(posterior_samples, rowvar=False)
-        norm_dist = dist.MultivariateNormal(
-            loc=posterior_samples_mean, covariance_matrix=post_samples_cov
-        )
+        cov_fn = lambda x: np.cov(x, rowvar=False)
+        norm_dist_fn = dist.MultivariateNormal
     else:
         raise ValueError("Guide can only be AutoDiagonalNormal or AutoMultivariateNormal")
-        
+
     for i in range(replications):
+        params0, y_synthetic = model.generate_synthetic_data(x_data)
+        post_samples = inference_engine(x_data, y_synthetic)
+        post_samples_mean = post_samples.mean(axis=0)
+        post_samples_scale = cov_fn(post_samples)
+        norm_dist = norm_dist_fn(post_samples_mean, post_samples_scale)
         probs[i] = norm_dist.cdf(params0)
+        if i % 10 == 0:
+            print(".", end="")
+    
     return probs.numpy()
 
 
 def apply_PSIS():
-    pass
+    # is there a method like model.log_prob? -- technically we can assume just normal and use current priors 
+    # but would like it to be more generic&flexible and applicable to different
 
 
 def check_Huggins_stuff():
     pass
-
-

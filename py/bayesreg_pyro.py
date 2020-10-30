@@ -9,6 +9,9 @@ from pyro.nn import PyroSample, PyroModule
 # for VI posterior sampling and hmc
 from pyro.infer import Predictive, MCMC, NUTS 
 
+__all__ = ["BayesianRegression", "run_vi", "run_hmc"]
+
+
 class BayesianRegression(PyroModule):
     """Bayesian linear regression model"""
     def __init__(
@@ -48,17 +51,24 @@ class BayesianRegression(PyroModule):
         sigma0 = self._sigma_prior.sample()
         if self.bias_flag:
             b0 = self._bias_prior.sample()
-            params = (sigm0, w0, b0)
+            params = (sigma0, w0, b0)
             mean = b0 + torch.mm(x_data, w0.T)
         else:
             params = (sigma0, w0)
             mean = torch.mm(x_data, w0.T)
-        
-        return np.column_stack(params), dist.Normal(mean, sigma0).sample()
+        # todo: check how to concat the tensors directly
+        return torch.Tensor(np.column_stack(params)), dist.Normal(mean, sigma0).sample()
         
 
 def run_vi(
-    x_data, y_data, vi_engine, model, guide, num_iterations=int(1e4), num_post_samples=int(1e3),
+    x_data, 
+    y_data, 
+    vi_engine, 
+    model, 
+    guide, 
+    num_iterations=int(1e4), 
+    num_post_samples=int(1e3),
+    return_elbo=True,
 ): 
     """
     Runs VI for a given number of iterations -- num_iterations
@@ -81,6 +91,7 @@ def run_vi(
     if num_post_samples == 0 or num_post_samples is None:
         return elbos
     else:
+        samples = torch.stack([guide.sample_latent() for i in range(num_post_samples)])
         # we dont need posterior predictives to sample from posterior!!
 #         predictive = Predictive(
 #             model, 
@@ -88,8 +99,10 @@ def run_vi(
 #             num_samples=num_post_samples, 
 #             return_sites=("linear.weight", "linear.bias", "sigma",)
 #         )
-
-        return elbos, np.row_stack([guide.sample_latent() for i in range(num_post_samples)])
+        if return_elbo:
+            return elbos, samples
+        else:
+            return samples
     
     
 def run_hmc(x_data, y_data, model, num_samples=1000, warmup_steps=200,):
