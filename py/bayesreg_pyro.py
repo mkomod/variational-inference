@@ -22,13 +22,13 @@ class BayesianRegression(PyroModule):
     ):
         
         super().__init__()
-        self._bias_flag = bias
+        self.bias_flag = bias
         # setup the linear model
         self.linear = PyroModule[torch.nn.Linear](in_features, out_features, bias=bias)
         # setup priors
         self._weight_prior = weight_prior or pyro_dist.Normal(0., 1.).expand([out_features, in_features])#.to_event(2)
         self.linear.weight = PyroSample(self._weight_prior)
-        if self._bias_flag:
+        if self.bias_flag:
             self._bias_prior = bias_prior or pyro_dist.Normal(0., 2.).expand([out_features])#.to_event(1)
             self.linear.bias =  PyroSample(self._bias_prior)
         self._sigma_prior = sigma_prior or pyro_dist.HalfCauchy(scale=torch.tensor([1.0]))
@@ -46,15 +46,15 @@ class BayesianRegression(PyroModule):
         """returns: generated parameters and synthethic samples"""
         w0 = self._weight_prior.sample()
         sigma0 = self._sigma_prior.sample()
-        if self._bias_flag:
+        if self.bias_flag:
             b0 = self._bias_prior.sample()
-            params = (b0, w0, sigma0)
+            params = (sigm0, w0, b0)
             mean = b0 + torch.mm(x_data, w0.T)
         else:
-            params = (w0, sigma0)
+            params = (sigma0, w0)
             mean = torch.mm(x_data, w0.T)
         
-        return params, dist.Normal(mean, sigma0).sample()
+        return np.column_stack(params), dist.Normal(mean, sigma0).sample()
         
 
 def run_vi(
@@ -81,14 +81,15 @@ def run_vi(
     if num_post_samples == 0 or num_post_samples is None:
         return elbos
     else:
-        predictive = Predictive(
-            model, 
-            guide=guide, 
-            num_samples=num_post_samples, 
-            return_sites=("linear.weight", "linear.bias", "sigma",)
-        )
-        samples = predictive(x_data)
-        return elbos, samples
+        # we dont need posterior predictives to sample from posterior!!
+#         predictive = Predictive(
+#             model, 
+#             guide=guide, 
+#             num_samples=num_post_samples, 
+#             return_sites=("linear.weight", "linear.bias", "sigma",)
+#         )
+
+        return elbos, np.row_stack([guide.sample_latent() for i in range(num_post_samples)])
     
     
 def run_hmc(x_data, y_data, model, num_samples=1000, warmup_steps=200,):
