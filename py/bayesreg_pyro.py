@@ -29,7 +29,7 @@ class BayesianRegression(PyroModule):
         self._weight_prior = weight_prior or pyro_dist.Normal(0., 1.).expand([out_features, in_features])#.to_event(2)
         self.linear.weight = PyroSample(self._weight_prior)
         if self._bias_flag:
-            self._bias_prior = bias_prior or pyro_dist.Normal(0., 2.).expand([out_features])#.to_event(1)
+            self._bias_prior = bias_prior or pyro_dist.Normal(0., 100.).expand([out_features])#.to_event(1)
             self.linear.bias =  PyroSample(self._bias_prior)
         self._sigma_prior = sigma_prior or pyro_dist.HalfCauchy(scale=torch.tensor([1.0]))
             
