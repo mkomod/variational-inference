@@ -6,26 +6,36 @@ import pyro
 import pyro.distributions as pyro_dist
 from pyro.nn import PyroSample, PyroModule
 
-from pyro.infer.autoguide import AutoDiagonalNormal
-from pyro.infer import Predictive
-from pyro.infer import MCMC, NUTS # for hmc
+# for VI posterior sampling and hmc
+from pyro.infer import Predictive, MCMC, NUTS 
 
 class BayesianRegression(PyroModule):
-    def __init__(self, in_features, out_features):
+    """Bayesian linear regression model"""
+    def __init__(
+        self, 
+        in_features, 
+        out_features=1,
+        bias=True,
+        weight_prior=None,
+        sigma_prior=None,
+    ):
+        
         super().__init__()
-        self.linear = PyroModule[torch.nn.Linear](in_features, out_features, bias=True)
-        self.linear.weight = PyroSample(pyro_dist.Normal(0., 1.).expand([out_features, in_features]).to_event(2))
+        self._weight_prior = weight_prior or pyro_dist.Normal(0., 1.).expand([out_features, in_features])# .to_event(2)
+        self._sigma_prior = sigma_prior or pyro_dist.HalfCauchy(scale=torch.tensor([1.0]))
+        self.linear = PyroModule[torch.nn.Linear](in_features, out_features, bias=bias)
+        self.linear.weight = PyroSample(self._weight_prior)
         
         
     def forward(self, x, y=None):
-        sigma = pyro.sample("sigma",  pyro_dist.HalfCauchy(scale=torch.tensor([1.0])))
+        sigma = pyro.sample("sigma",  self._sigma_prior)
         mean = self.linear(x).squeeze(-1)
         with pyro.plate("data", x.shape[0]):
             obs = pyro.sample("obs", pyro_dist.Normal(mean, sigma), obs=y)
         return mean
     
     
-def run_vi(x_data, y_data, vi_engine, model, guide, num_iterations=int(1e4), num_post_samples=int(1e4)): 
+def run_vi(x_data, y_data, vi_engine, model, guide, num_iterations=int(1e4), num_post_samples=int(1e3)): 
     """
     Runs VI for a given number of iterations -- num_iterations
     Params:
@@ -65,3 +75,4 @@ def run_hmc(x_data, y_data, model, num_samples=1000, warmup_steps=200):
     hmc_samples = {k: v.detach().cpu().numpy() for k, v in mcmc.get_samples().items()}
     hmc_samples["linear.weight"] = hmc_samples["linear.weight"].reshape(num_samples, -1)
     return hmc_samples
+    
