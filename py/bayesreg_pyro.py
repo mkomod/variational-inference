@@ -29,10 +29,10 @@ class BayesianRegression(PyroModule):
         # setup the linear model
         self.linear = PyroModule[torch.nn.Linear](in_features, out_features, bias=bias)
         # setup priors
-        self._weight_prior = weight_prior or pyro_dist.Normal(0., 1.).expand([out_features, in_features])#.to_event(2)
+        self._weight_prior = weight_prior or pyro_dist.Normal(0., 1.).expand([out_features, in_features]).to_event(2)
         self.linear.weight = PyroSample(self._weight_prior)
         if self.bias_flag:
-            self._bias_prior = bias_prior or pyro_dist.Normal(0., 2.).expand([out_features])#.to_event(1)
+            self._bias_prior = bias_prior or pyro_dist.Normal(0., 2.).expand([out_features]).to_event(1)
             self.linear.bias =  PyroSample(self._bias_prior)
         self._sigma_prior = sigma_prior or pyro_dist.HalfCauchy(scale=torch.tensor([1.0]))
             
@@ -46,18 +46,18 @@ class BayesianRegression(PyroModule):
     
     
     def generate_synthetic_data(self, x_data):
-        """returns: generated parameters and synthethic samples"""
-        w0 = self._weight_prior.sample()
-        sigma0 = self._sigma_prior.sample()
+        """returns: generated parameters, synthethic samples and """
+        trace = pyro.poutine.trace(self).get_trace(x=x_data)
+        y_synthetic = trace.nodes["obs"]["value"]
         if self.bias_flag:
-            b0 = self._bias_prior.sample()
-            params = (sigma0, w0, b0)
-            mean = b0 + torch.mm(x_data, w0.T)
+            nodes = ["sigma", "linear.weight", "linear.bias"]
         else:
-            params = (sigma0, w0)
-            mean = torch.mm(x_data, w0.T)
-        # todo: check how to concat the tensors directly
-        return torch.Tensor(np.column_stack(params)), dist.Normal(mean, sigma0).sample()
+            nodes = ["sigma", "linear.weight"]
+        params = torch.cat([trace.nodes[x]["value"].reshape(-1,) for x in nodes])
+        return params, y_synthetic
+    
+    
+    
         
 
 def run_vi(
