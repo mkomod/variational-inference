@@ -3,73 +3,111 @@ import numpy as np
 import torch
 import torch.distributions as dist
 import pyro
-from pyro import poutine
+import psis
+from bayesreg_pyro import sample_and_calculate_log_impweight
+from pyro.infer import SVI, Trace_ELBO
+from pyro.infer.autoguide import AutoDiagonalNormal, AutoMultivariateNormal
+
 
 __all__ = ["diagnose_vi_VSBC", "apply_PSIS", ]
 
 
-def diagnose_vi_VSBC(x_data, model, guide, inference_engine, replications=150):
+
+def SNIS_approximate(samples, log_weights, fn=lambda x: x):
+    """fn - function (of params) whose approximation is to be calculated"""
+    # weights add up to 1
+    weights = torch.exp(log_weights).reshape(1, -1)
+    return torch.mm(weights, fn(samples)).reshape(-1)
+
+
+def diagnose_vi_VSBC(
+    x_data, 
+    model, 
+    guide_class, 
+    vi_num_iterations=3000,
+    samples_generator=sample_and_calculate_log_impweight, 
+    adjust_VI_method=None,
+    replications=150, 
+):
     """ 
     params:
         model: needs to have `generate_synthetic_data` method
-        inference_engine: should return samples; should accept x_data, y_synthetic
-                          (partial in everything else)
+        inference_engine: should run VI (accepts x_data and y_syn -- partial in everything else)
+    samples_generator: ...
     Need to figure out how to use guides to evaluate that distribution;
     currently its .cdf returns "not implemented error" any way..
+    adjust_VI_method: one of "PSIS", "SNIS" or None (for no adjustment, default)
                           
-    returns:
+    returns: numpy array of p-values
         
     """
     # output: p-values
-    probs = torch.zeros(replications, guide.latent_dim)
-        
-    if guide.__repr__() not in ["AutoDiagonalNormal()", "AutoMultivariateNormal()"]:
+    
+    if guide_class not in [AutoDiagonalNormal, AutoMultivariateNormal]:
         raise ValueError(
-            f"Guide={guide.__repr__()} is not supported.",
+            f"Guide={guide_class} is not supported.",
             "Guide can only be AutoDiagonalNormal or AutoMultivariateNormal"
         )
-
+    optimser = pyro.optim.Adam({"lr": 0.009})
+    probs_unscaled = [] #torch.zeros(replications, guide.latent_dim)
+    probs_snis_mean_only = [] # mean correction only
+    probs_psis_mean_only = [] # mean correction only
+    probs_snis_mean_and_std = [] # mean and std correction 
+    probs_psis_mean_and_std = [] # mean and std correction 
+    kappas = torch.empty(replications)
+    
     for i in range(replications):
         if i % 10 == 0:
-            print(".", end="")
+            print(".--", end="")
+            
+        pyro.clear_param_store()
+        guide = guide_class(model)
+        # synthetic data from prior
         params0, y_synthetic = model.generate_synthetic_data(x_data)
-        post_samples = inference_engine(x_data, y_synthetic)
-        post_samples_mean = post_samples.mean(axis=0)
-        post_samples_scale = post_samples.std()
-        norm_dist = dist.Normal(post_samples_mean, post_samples_scale)
-        probs[i] = norm_dist.cdf(params0)
         
-    return probs.numpy()
-
-
-def sample_and_calculate_log_impweight(x_data, y_data, model, guide, replications=150):
-    """  
-    returns: log importance weights
-    """
-    log_impweights = torch.zeros(torch.Size([replications]))
-    for i in range(replications):
-        trace_guide = poutine.trace(guide).get_trace()
-        # dict
-        param_sample = trace_guide.nodes["_RETURN"]["value"]
-        # need to evaluate the log probs so that it appears in ["_AutoDiagonalNormal_latent"]["log_prob_sum"]
-        trace_guide.log_prob_sum()
-        # check log prob sum!! ["_AutoDiagonalNormal_latent"]["log_prob_sum"] seems to be correct,
-        # while the above <trace_guide.log_prob_sum()> equals 
-        param_sample_logprob = trace_guide.log_prob_sum() #trace_guide.nodes["_AutoDiagonalNormal_latent"]["log_prob_sum"]
-
-        cond_model = poutine.condition(model, data={"obs": y_data, **param_sample})
-        trace_cond_model = poutine.trace(cond_model).get_trace(x=x_data)
-        joint_logprob = trace_cond_model.log_prob_sum()
-        #<=>estimated log-posterior
-        log_impweights[i] = joint_logprob - param_sample_logprob
-    return log_impweights
-
-
-def apply_PSIS(x_data, y_data, model, guide, inference_engine, replications=150):
-    pass
-    # is there a method like model.log_prob? -- technically we can assume just normal and use current priors 
-    # but would like it to be more generic&flexible and applicable to different
-    
+        # run VI on synthetic data
+        _ = model.run_vi(
+            x_data, y_synthetic, SVI(model, guide, optimser, loss=Trace_ELBO()), num_iterations=vi_num_iterations,
+        )
+        
+        guide.requires_grad_(False)
+        # generate samples and weights
+        post_samples, log_imp_weights = samples_generator(x_data, y_synthetic, model, guide)
+        #print(f"post_samples[0]={post_samples[0]}")
+        psis_log_imp_weights, kappa = psis.psislw(log_imp_weights)
+        psis_log_imp_weights = torch.tensor(psis_log_imp_weights)
+        kappas[i] = kappa # store kappas 
+        
+        # unscaled p-values
+        q_mean = guide.get_posterior().mean
+        q_std = guide.get_posterior().stddev
+        probs_unscaled.append(1 - dist.Normal(q_mean, q_std).cdf(params0))
+        
+        # SNIS Scaled p-values
+        q_mean_SNIS = SNIS_approximate(post_samples, log_imp_weights)
+        probs_snis_mean_only.append(1 - dist.Normal(q_mean_SNIS, q_std).cdf(params0))
+        
+        second_moment = SNIS_approximate(post_samples, log_imp_weights, lambda x: x**2)
+        q_std_SNIS = torch.sqrt(second_moment - q_mean_SNIS**2)
+        probs_snis_mean_and_std.append(1 - dist.Normal(q_mean_SNIS, q_std_SNIS).cdf(params0))
+        
+        # PSIS scaled p-values 
+        q_mean_PSIS = SNIS_approximate(post_samples, psis_log_imp_weights)
+        probs_psis_mean_only.append(1 - dist.Normal(q_mean_PSIS, q_std).cdf(params0))
+        
+        second_moment = SNIS_approximate(post_samples, psis_log_imp_weights, lambda x: x**2)
+        q_std_PSIS = torch.sqrt(second_moment - q_mean_PSIS**2)
+        probs_psis_mean_and_std.append(1 - dist.Normal(q_mean_PSIS, q_std_PSIS).cdf(params0))
+                    
+    pyro.clear_param_store()
+    return {
+        "probs_unscaled": torch.stack(probs_unscaled).numpy(),
+        "probs_snis_mean_only": torch.stack(probs_snis_mean_only).numpy(),
+        "probs_snis_mean_and_std": torch.stack(probs_snis_mean_and_std).numpy(),
+        "probs_psis_mean_only": torch.stack(probs_psis_mean_only).numpy(),
+        "probs_psis_mean_and_std": torch.stack(probs_psis_mean_and_std).numpy(),
+        "kappas": kappas,
+    }
 
 
 def check_Huggins_stuff():
