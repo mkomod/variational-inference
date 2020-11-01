@@ -68,7 +68,7 @@ def psis_correction(logdensity, var_family, var_param, n_samples):
     samples, log_weights = get_samples_and_log_weights(logdensity, var_family,
                                                        var_param, n_samples)
     smoothed_log_weights, khat = psislw(log_weights)
-    return samples.T, smoothed_log_weights, khat
+    return samples.T, smoothed_log_weights, log_weights, khat
 
 
 def improve_with_psis(logdensity, var_family, var_param, n_samples,
