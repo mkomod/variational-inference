@@ -1,6 +1,6 @@
 ### VI inference methods: 
 1. MF_VI:=Mean field (independent gaussian Variational family)  stocahastic variational inference
-2. 2. MVN_VI: Multivariate Gaussian variational family stocahastic variational inference
+2. MVN_VI: Multivariate Gaussian variational family stocahastic variational inference
 
 ### Data: 
 Bodymass dataset (dropped density as that's an expensive feature to obtain and the point of this exercise is to develop a cheap way to measure bodymass)
@@ -31,7 +31,7 @@ Bodymass dataset (dropped density as that's an expensive feature to obtain and t
 
 - Using PSIS smoothed samples from the variational posterior.
 
-p-values are calculated using 500 runs of the Algorithm (draw from prior -> simulate data -> run VI -> calculate p-value)
+p-values are calculated using 500 runs of the Algorithm (draw from prior -> simulate data -> run VI -> calculate p-value); charts of the results can be found here: https://github.com/mkomod/statml-sml/blob/master/py/results/VSBC_regression_results.ipynb
 
 Generally the variational posterior seems unbiased, except for log-sigma, so the smoothing does not do much.
 
