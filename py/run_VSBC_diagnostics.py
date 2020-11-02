@@ -1,3 +1,6 @@
+## Wrapper around diagnose_vi_VSBC to easier run in tetminal
+## stores pickled results in "results/" 
+
 from functools import partial
 import time
 import argparse

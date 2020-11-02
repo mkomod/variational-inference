@@ -4,7 +4,9 @@ import torch
 import torch.distributions as dist
 import pyro
 import pyro.distributions as pyro_dist
+from pyro import poutine
 from pyro.nn import PyroSample, PyroModule
+from pyro.infer.autoguide import AutoDiagonalNormal, AutoMultivariateNormal
 
 # for VI posterior sampling and hmc
 from pyro.infer import Predictive, MCMC, NUTS 
@@ -46,7 +48,9 @@ class BayesianRegression(PyroModule):
     
     
     def generate_synthetic_data(self, x_data):
-        """returns: generated parameters, synthethic samples and """
+        """
+        syn data from prior
+        returns: generated parameters, synthethic samples and """
         trace = pyro.poutine.trace(self).get_trace(x=x_data)
         y_synthetic = trace.nodes["obs"]["value"]
         if self.bias_flag:
@@ -56,54 +60,70 @@ class BayesianRegression(PyroModule):
         params = torch.cat([trace.nodes[x]["value"].reshape(-1,) for x in nodes])
         return params, y_synthetic
     
-    
-    
-        
+    @staticmethod
+    def run_vi(
+        x_data, 
+        y_data, 
+        vi_engine, 
+        num_iterations=int(1e4),
+    ): 
+        """
+        Runs VI for a given number of iterations -- num_iterations
+        Params:
+            vi_engine -- anything that can do the optimisation and has .step method
+            guide -- variational family
+        Returns:
+            ELBOs (average) and Samples (if num_post_samples > 0)
+        """
+        pyro.clear_param_store()
+        elbos = []
+        num_samples = x_data.shape[0]
+        for j in range(num_iterations):
+            # calculate the loss and take a gradient step
+            loss = vi_engine.step(x_data, y_data) / num_samples
+            elbos.append(-loss)
 
-def run_vi(
-    x_data, 
-    y_data, 
-    vi_engine, 
-    model, 
-    guide, 
-    num_iterations=int(1e4), 
-    num_post_samples=int(1e3),
-    return_elbo=True,
-): 
-    """
-    Runs VI for a given number of iterations -- num_iterations
-    Params:
-        vi_engine -- anything that can do the optimisation and has .step method
-        model -- generative model to do inference on
-        guide -- variational family
-    Returns:
-        ELBOs (average) and Samples (if num_post_samples > 0)
-    """
-    pyro.clear_param_store()
-    elbos = []
-    num_samples = x_data.shape[0]
-    for j in range(num_iterations):
-        # calculate the loss and take a gradient step
-        loss = vi_engine.step(x_data, y_data) / num_samples
-        elbos.append(-loss)
-    
-    guide.requires_grad_(False)
-    if num_post_samples == 0 or num_post_samples is None:
         return elbos
-    else:
-        samples = torch.stack([guide.sample_latent() for i in range(num_post_samples)])
-        # we dont need posterior predictives to sample from posterior!!
-#         predictive = Predictive(
-#             model, 
-#             guide=guide, 
-#             num_samples=num_post_samples, 
-#             return_sites=("linear.weight", "linear.bias", "sigma",)
-#         )
-        if return_elbo:
-            return elbos, samples
-        else:
-            return samples
     
+
+def sample_and_calculate_log_impweight(x_data, y_data, model, guide, num_post_samples=int(1e3)):
+    """  
+    returns: samples and their log importance weights (adding to 0/exponentiated sum=1)
+    """
+    log_impweights = torch.zeros(torch.Size([num_post_samples]))
+    samples = torch.zeros(torch.Size([num_post_samples, guide.latent_dim]))
+    #sigmas = torch.zeros(torch.Size([replications]))
+    #sigma_logprobs = torch.zeros(torch.Size([replications]))
+    
+    for i in range(num_post_samples):
+        trace_guide = poutine.trace(guide).get_trace()
+        param_sample = trace_guide.nodes["_RETURN"]["value"]
+        # need to evaluate the log probs so that it appears in ["_AutoDiagonalNormal_latent"]["log_prob_sum"]
+        trace_guide.log_prob_sum()
+        # check log prob sum!! ["_AutoDiagonalNormal_latent"]["log_prob_sum"] seems to be correct,
+        # while the above <trace_guide.log_prob_sum()> equals 
+        # the log prob sum for sigma (which is a deterministic function of log sigma is wrong, i.e. not zero)
+        # hack
+        if isinstance(guide, AutoDiagonalNormal):
+            samples[i, :] = trace_guide.nodes["_AutoDiagonalNormal_latent"]["value"]
+            param_sample_logprob = trace_guide.nodes["_AutoDiagonalNormal_latent"]["log_prob_sum"]
+        else:
+            samples[i, :] = trace_guide.nodes["_AutoMultivariateNormal_latent"]["value"]
+            param_sample_logprob = trace_guide.nodes["_AutoMultivariateNormal_latent"]["log_prob_sum"]
+        #param_sample_logprob = trace_guide.log_prob_sum() - trace_guide.nodes["sigma"]["log_prob_sum"] 
+        #trace_guide.nodes["_AutoDiagonalNormal_latent"]["log_prob_sum"]
+
+        cond_model = poutine.condition(model, data={"obs": y_data, **param_sample})
+        trace_cond_model = poutine.trace(cond_model).get_trace(x=x_data)
+        joint_logprob = trace_cond_model.log_prob_sum()
+        #<=>estimated log-posterior
+        log_impweights[i] = joint_logprob - param_sample_logprob
+    
+    log_impweights = log_impweights - torch.logsumexp(log_impweights, dim=0)
+    
+    return samples, log_impweights
+
+
     
 def run_hmc(x_data, y_data, model, num_samples=1000, warmup_steps=200,):
     """
