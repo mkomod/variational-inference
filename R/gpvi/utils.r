@@ -1,5 +1,6 @@
 # Utilites for GPVI
 #
+library(Rcpp)
 
 #' Plot GPVI
 gpvi.plot <- function(lnu, X, Y, K) {
@@ -51,4 +52,23 @@ rlaplace <- function(n, m=0, eta = 1) {
 laplaceInvCdf <- function(p, m, b) {
     return(m - b * sign(p - 0.5) * log(1 - 2 * abs(p - 0.5)))
 }
+
+
+logDet <- function(X) {
+    log(det(X))
+}
+
+# Turn to C++ for operations on matrices
+Rcpp::cppFunction(depends = "RcppArmadillo", '
+    arma::mat solve(arma::mat X) {
+	return(arma::inv(X));
+    }'
+)
+
+Rcpp::cppFunction(depends = "RcppArmadillo", '
+    double logDet(arma::mat X) {
+	return log(arma::det(X));
+    }'
+)
+
 

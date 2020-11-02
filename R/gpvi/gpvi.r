@@ -58,7 +58,7 @@ elbo <- function(lnu, K, V, eta) {
     K.inv <- solve(K)
     res <- sum(ln.py) + 
 	   0.5 * (sum(diag(K.inv %*% S)) + 
-	   t(mu) %*% K.inv %*% mu - log(det(S)))
+	   t(mu) %*% K.inv %*% mu - logDet(S))
 
     # cat("elbo:", res, "\n")
     return(res)
