@@ -6,9 +6,9 @@ data {
   int<lower=0> N2; //number data to be predicted 
   real x2[N2];
   //Hyperparameters
-  //real<lower = 0> rho;
-  //real<lower = 0> alpha;
-  //real<lower = 0> eta_inv;
+  real<lower = 0> rho;
+  real<lower = 0> alpha;
+  real<lower = 0> eta_inv;
   }
   
 transformed data {
@@ -25,7 +25,7 @@ parameters {
 transformed parameters{
   vector[N] f;
   {
-    matrix[N,N] K = cov_exp_quad(x, 3, 2) + diag_matrix(rep_vector(1e-10, N));
+    matrix[N,N] K = cov_exp_quad(x, alpha, rho) + diag_matrix(rep_vector(1e-10, N));
     matrix[N,N] L_K = cholesky_decompose(K);
     f = L_K * a;
   }
@@ -34,7 +34,7 @@ transformed parameters{
 model {
   a ~ std_normal();
   
-  y1 ~ double_exponential(f[1:N1], 1.0/1.5);
+  y1 ~ double_exponential(f[1:N1], eta_inv);
     //for (i in 1:N){
         //aiming for laplace
         //y[i] ~ normal(f[i], 2/eta^2);
@@ -43,5 +43,5 @@ model {
 generated quantities{
   vector[N2] y2;
   for (n2 in 1:N2)
-    y2[n2] = double_exponential_rng(f[N1 + n2], 1.0/1.5);
+    y2[n2] = double_exponential_rng(f[N1 + n2], eta_inv);
 }
