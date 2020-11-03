@@ -1,6 +1,5 @@
 # Utilites for GPVI
 #
-library(Rcpp)
 
 #' Plot GPVI
 gpvi.plot <- function(lnu, X, Y, K) {
