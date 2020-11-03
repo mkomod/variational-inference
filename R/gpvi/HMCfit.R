@@ -4,24 +4,22 @@ library(rstan)
 library(here)
 options(mc.cores = parallel::detectCores())
 rstan_options(auto_write = TRUE)
-# dont remember what this does: rstan_option(auto_write = TRUE)
 
-# Simulate dataset:
+# Recover toy dataset
 d <- read.csv("data.csv")
 X = d$X
 f = d$f
 Y = d$Y
 e = d$e
 
+# Plot it
 bounds <- quantile(rlaplace(1000, eta=1.5), 0.025)
 lower <- f + bounds[1]
 upper <- f - bounds[1]
-plot(X, f, ylim=c(-15, 15), type="b", pch=16, cex=0.7)
+plot(X, f, ylim=c(-7.5, 4.5), type="b", pch=16, cex=0.7)
 lines(X, upper, col="red")
 lines(X, lower, col="red")
-
 points(X, Y, pch=17, col="green")
-
 
 
 #Fit the model in stan given the true parameters, that unfortunately need to be substituted by hand in stan code
